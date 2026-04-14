@@ -113,8 +113,7 @@ export const DashboardPage = () => {
 
       <section className="grid gap-4 xl:grid-cols-[1.05fr,0.95fr]">
         <Card>
-          <p className="eyebrow">Quick Health</p>
-          <h2 className="mt-2 text-3xl text-brand-navy">Field checklist</h2>
+          <h2 className="mt-2 text-3xl text-brand-orange">Quick Health</h2>
           <div className="mt-5 grid gap-3 text-sm">
             <p className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-brand-orange" /> Last packet: {formatTimestamp(snapshot.lastPacketAt)}
@@ -135,8 +134,7 @@ export const DashboardPage = () => {
         <Card className="overflow-hidden bg-brand-navy">
           <div className="flex items-start gap-3">
             <div>
-              <p className="eyebrow text-brand-orange">Watering Suggestion</p>
-              <h2 className="mt-2 text-3xl text-brand-navy">Keep the next cycle intentional</h2>
+              <h2 className="mt-2 text-3xl text-brand-orange">Water Suggestion</h2>
             </div>
           </div>
           <p className="mt-4 text-sm leading-6 text-white/76">{irrigationSuggestion}</p>
