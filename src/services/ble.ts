@@ -1,60 +1,36 @@
-import { ConnectionSnapshot, ConnectionStatus, DeviceMetadata, SensorReading, SoilCalibration } from "../types";
-import { clamp } from "../utils/math";
+import {
+  ConnectionSnapshot,
+  ConnectionStatus,
+  DeviceMetadata,
+  EspBlePayload,
+  SensorReading,
+} from "../types";
 
-export const BLE_SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";
-export const BLE_NOTIFY_CHARACTERISTIC_UUID = "12345678-1234-1234-1234-1234567890ac";
-export const BLE_FIRMWARE_CHARACTERISTIC_UUID = "12345678-1234-1234-1234-1234567890ad";
+// ── Your ESP32 UUIDs ──────────────────────────────────────────────────────────
+export const BLE_SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+export const BLE_NOTIFY_CHARACTERISTIC_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
 
-const BATTERY_SERVICE_UUID = 0x180f;
-const BATTERY_CHARACTERISTIC_UUID = 0x2a19;
 const decoder = new TextDecoder();
-
-const toSoilPercent = (raw: number, calibration: SoilCalibration): number => {
-  const span = Math.max(1, calibration.max - calibration.min);
-  const normalized = (raw - calibration.min) / span;
-  return clamp((1 - normalized) * 100, 0, 100);
-};
 
 type ReadingListener = (reading: SensorReading) => void;
 type ConnectionListener = (snapshot: ConnectionSnapshot) => void;
 
 export class BleService {
   private device: BluetoothDevice | null = null;
-
   private server: BluetoothRemoteGATTServer | null = null;
-
   private notifyCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
-
-  private firmware: string | undefined;
-
-  private batteryLevel: number | undefined;
-
   private status: ConnectionStatus = "idle";
-
   private lastPacketAt: number | null = null;
-
   private error: string | null = null;
-
   private reconnectAttempts = 0;
-
   private reconnectTimer: number | null = null;
-
   private maxReconnectAttempts = 6;
-
   private manualDisconnect = false;
-
-  private calibration: SoilCalibration = { min: 1200, max: 3200 };
-
   private readingListeners = new Set<ReadingListener>();
-
   private connectionListeners = new Set<ConnectionListener>();
 
   isSupported(): boolean {
     return typeof navigator !== "undefined" && "bluetooth" in navigator;
-  }
-
-  setCalibration(calibration: SoilCalibration): void {
-    this.calibration = calibration;
   }
 
   onReading(listener: ReadingListener): () => void {
@@ -73,15 +49,14 @@ export class BleService {
       status: this.status,
       device: this.device
         ? {
-            id: this.device.id || "unknown",
-            name: this.device.name || "ESP32 Sensor",
-            firmwareVersion: this.firmware,
+            id: this.device.id || "esp32-greenhouse-1",
+            name: this.device.name || "ESP32-Greenhouse",
             lastPacketAt: this.lastPacketAt ?? undefined,
-            rssi: undefined
+            rssi: undefined,
           }
         : null,
       lastPacketAt: this.lastPacketAt,
-      error: this.error
+      error: this.error,
     };
   }
 
@@ -96,13 +71,12 @@ export class BleService {
 
     try {
       const device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [BLE_SERVICE_UUID] }],
-        optionalServices: [BLE_SERVICE_UUID, BATTERY_SERVICE_UUID]
+        filters: [{ name: "ESP32-Greenhouse" }],
+        optionalServices: [BLE_SERVICE_UUID],
       });
-
       await this.connect(device);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "BLE scan cancelled";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "BLE scan cancelled";
       this.setState("disconnected", message);
     }
   }
@@ -128,28 +102,32 @@ export class BleService {
   }
 
   async reconnect(): Promise<void> {
-    if (!this.device) {
-      throw new Error("No previously connected device.");
-    }
+    if (!this.device) throw new Error("No previously connected device.");
     this.manualDisconnect = false;
     await this.connect(this.device, true);
   }
 
   private async connect(device: BluetoothDevice, isReconnect = false): Promise<void> {
     this.device = device;
-    this.device.removeEventListener("gattserverdisconnected", this.handleDisconnect as EventListener);
-    this.device.addEventListener("gattserverdisconnected", this.handleDisconnect as EventListener);
+    this.device.removeEventListener(
+      "gattserverdisconnected",
+      this.handleDisconnect as EventListener
+    );
+    this.device.addEventListener(
+      "gattserverdisconnected",
+      this.handleDisconnect as EventListener
+    );
 
     this.setState(isReconnect ? "reconnecting" : "connecting");
 
     const server = await device.gatt?.connect();
-    if (!server) {
-      throw new Error("Failed to open GATT server.");
-    }
+    if (!server) throw new Error("Failed to open GATT server.");
     this.server = server;
 
     const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-    const characteristic = await service.getCharacteristic(BLE_NOTIFY_CHARACTERISTIC_UUID);
+    const characteristic = await service.getCharacteristic(
+      BLE_NOTIFY_CHARACTERISTIC_UUID
+    );
     await characteristic.startNotifications();
     characteristic.addEventListener(
       "characteristicvaluechanged",
@@ -157,9 +135,6 @@ export class BleService {
     );
 
     this.notifyCharacteristic = characteristic;
-    this.firmware = await this.readFirmwareVersion(service);
-    this.batteryLevel = await this.readBatteryLevel(server);
-
     this.reconnectAttempts = 0;
     this.error = null;
     this.setState("connected");
@@ -167,105 +142,58 @@ export class BleService {
 
   private handleCharacteristicChange = (event: Event): void => {
     const target = event.target as BluetoothRemoteGATTCharacteristic;
-    if (!target.value) {
-      return;
-    }
+    if (!target.value) return;
 
-    const parsed = this.parsePayload(target.value);
-    if (!parsed) {
-      return;
-    }
+    const reading = this.parsePayload(target.value);
+    if (!reading) return;
 
-    this.lastPacketAt = parsed.timestamp;
-
-    const reading: SensorReading = {
-      id: crypto.randomUUID(),
-      timestamp: parsed.timestamp,
-      temperatureC: parsed.temperatureC,
-      humidityPct: parsed.humidityPct,
-      soilRawOrPct: parsed.soilRaw,
-      soilPct: parsed.soilPct,
-      batteryV: parsed.batteryV,
-      deviceId: this.device?.id || "esp32",
-      source: "ble",
-      rssi: undefined
-    };
-
-    this.readingListeners.forEach((listener) => listener(reading));
+    this.lastPacketAt = reading.timestamp;
+    this.readingListeners.forEach((l) => l(reading));
     this.notifyConnectionListeners();
   };
 
-  private parsePayload(value: DataView): {
-    timestamp: number;
-    temperatureC: number;
-    humidityPct: number;
-    soilRaw: number;
-    soilPct: number;
-    batteryV?: number;
-  } | null {
-    const uint8 = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-
+  private parsePayload(value: DataView): SensorReading | null {
     try {
+      const uint8 = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
       const text = decoder.decode(uint8).trim().replace(/\0+$/g, "");
-      if (text.startsWith("{")) {
-        const parsed = JSON.parse(text) as {
-          t?: number;
-          h?: number;
-          s?: number;
-          bat?: number;
-          ts?: number;
-          temperatureC?: number;
-          humidityPct?: number;
-          soil?: number;
-        };
 
-        const temperatureC = Number(parsed.t ?? parsed.temperatureC);
-        const humidityPct = Number(parsed.h ?? parsed.humidityPct);
-        const soilRaw = Number(parsed.s ?? parsed.soil);
+      if (!text.startsWith("{")) return null;
 
-        if ([temperatureC, humidityPct, soilRaw].some((item) => Number.isNaN(item))) {
-          return null;
-        }
+      const p = JSON.parse(text) as Partial<EspBlePayload>;
 
-        return {
-          timestamp: Number(parsed.ts ?? Date.now()),
-          temperatureC,
-          humidityPct,
-          soilRaw,
-          soilPct: Number(toSoilPercent(soilRaw, this.calibration).toFixed(2)),
-          batteryV: parsed.bat
-        };
+      // Validate required fields
+      if (
+        p.temperature_c === undefined ||
+        p.humidity_pct === undefined ||
+        p.soil_1_pct === undefined ||
+        p.soil_2_pct === undefined
+      ) {
+        console.warn("[BLE] Missing required fields in payload:", p);
+        return null;
       }
-    } catch {
-      // Binary fallback is handled below.
-    }
 
-    if (uint8.byteLength < 12) {
+      return {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        deviceId: p.device_id ?? "esp32-greenhouse-1",
+        source: "ble",
+        temperatureC: p.temperature_c,
+        humidityPct: p.humidity_pct,
+        soil1Raw: p.soil_1_raw ?? 0,
+        soil1Pct: p.soil_1_pct,
+        soil2Raw: p.soil_2_raw ?? 0,
+        soil2Pct: p.soil_2_pct,
+        uptimeMs: p.uptime_ms,
+        sdOk: p.sd_ok,
+      };
+    } catch (err) {
+      console.error("[BLE] Failed to parse payload:", err);
       return null;
     }
-
-    const dv = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
-    const temperatureC = dv.getInt16(0, true) / 100;
-    const humidityPct = dv.getUint16(2, true) / 100;
-    const soilRaw = dv.getUint16(4, true);
-    const batteryMv = dv.getUint16(6, true);
-    const timestamp = dv.getUint32(8, true) * 1000;
-
-    return {
-      timestamp: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now(),
-      temperatureC,
-      humidityPct,
-      soilRaw,
-      soilPct: Number(toSoilPercent(soilRaw, this.calibration).toFixed(2)),
-      batteryV: Number((batteryMv / 1000).toFixed(2))
-    };
   }
 
   private handleDisconnect = (): void => {
-    if (this.manualDisconnect) {
-      return;
-    }
-
+    if (this.manualDisconnect) return;
     this.server = null;
     this.notifyCharacteristic = null;
     this.tryReconnect();
@@ -276,13 +204,15 @@ export class BleService {
       this.setState("disconnected", "Device disconnected.");
       return;
     }
-
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.setState("error", "Unable to reconnect to BLE device.");
       return;
     }
 
-    this.setState("reconnecting", `Reconnecting (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+    this.setState(
+      "reconnecting",
+      `Reconnecting (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`
+    );
 
     const delay = Math.min(16000, 1000 * 2 ** this.reconnectAttempts);
     this.reconnectAttempts += 1;
@@ -304,27 +234,6 @@ export class BleService {
     }
   }
 
-  private async readFirmwareVersion(service: BluetoothRemoteGATTService): Promise<string | undefined> {
-    try {
-      const characteristic = await service.getCharacteristic(BLE_FIRMWARE_CHARACTERISTIC_UUID);
-      const value = await characteristic.readValue();
-      return decoder.decode(value).trim();
-    } catch {
-      return undefined;
-    }
-  }
-
-  private async readBatteryLevel(server: BluetoothRemoteGATTServer): Promise<number | undefined> {
-    try {
-      const service = await server.getPrimaryService(BATTERY_SERVICE_UUID);
-      const characteristic = await service.getCharacteristic(BATTERY_CHARACTERISTIC_UUID);
-      const value = await characteristic.readValue();
-      return value.getUint8(0);
-    } catch {
-      return undefined;
-    }
-  }
-
   private setState(status: ConnectionStatus, error: string | null = null): void {
     this.status = status;
     this.error = error;
@@ -332,22 +241,8 @@ export class BleService {
   }
 
   private notifyConnectionListeners(): void {
-    const snapshot: ConnectionSnapshot = {
-      status: this.status,
-      device: this.device
-        ? {
-            id: this.device.id || "esp32",
-            name: this.device.name || "ESP32 Sensor",
-            firmwareVersion: this.firmware,
-            rssi: undefined,
-            lastPacketAt: this.lastPacketAt ?? undefined
-          }
-        : null,
-      lastPacketAt: this.lastPacketAt,
-      error: this.error
-    };
-
-    this.connectionListeners.forEach((listener) => listener(snapshot));
+    const snapshot = this.getSnapshot();
+    this.connectionListeners.forEach((l) => l(snapshot));
   }
 }
 

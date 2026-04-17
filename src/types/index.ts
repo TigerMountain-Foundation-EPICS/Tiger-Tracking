@@ -12,14 +12,23 @@ export type ConnectionStatus =
 export interface SensorReading {
   id: string;
   timestamp: number;
-  temperatureC: number;
-  humidityPct: number;
-  soilRawOrPct: number;
-  soilPct: number;
-  batteryV?: number;
-  rssi?: number;
   deviceId: string;
   source: ReadingSource;
+
+  // SHT31
+  temperatureC: number;
+  humidityPct: number;
+
+  // Dual soil moisture sensors
+  soil1Raw: number;
+  soil1Pct: number;
+  soil2Raw: number;
+  soil2Pct: number;
+
+  // Diagnostics
+  uptimeMs?: number;
+  sdOk?: boolean;
+  rssi?: number;
 }
 
 export interface DeviceMetadata {
@@ -36,17 +45,11 @@ export interface ThresholdSettings {
   soilLowPct: number;
 }
 
-export interface SoilCalibration {
-  min: number;
-  max: number;
-}
-
 export interface AppSettings {
   demoMode: boolean;
   demoConnected: boolean;
   units: "C" | "F";
   thresholds: ThresholdSettings;
-  soilCalibration: SoilCalibration;
   firebaseEnabled: boolean;
 }
 
@@ -66,22 +69,25 @@ export interface DailyAggregate {
   minHumidityPct: number;
   maxHumidityPct: number;
   avgHumidityPct: number;
-  minSoilPct: number;
-  maxSoilPct: number;
-  avgSoilPct: number;
+  minSoil1Pct: number;
+  maxSoil1Pct: number;
+  avgSoil1Pct: number;
+  minSoil2Pct: number;
+  maxSoil2Pct: number;
+  avgSoil2Pct: number;
 }
 
-export interface BlePayload {
-  t: number;
-  h: number;
-  s: number;
-  bat?: number;
-  ts?: number;
-}
-
-export interface BleParsedPacket {
-  reading: SensorReading;
-  rawText?: string;
+// Raw JSON shape sent by ESP32 over BLE
+export interface EspBlePayload {
+  device_id: string;
+  soil_1_raw: number;
+  soil_1_pct: number;
+  soil_2_raw: number;
+  soil_2_pct: number;
+  temperature_c: number;
+  humidity_pct: number;
+  uptime_ms: number;
+  sd_ok: boolean;
 }
 
 export interface ConnectionSnapshot {

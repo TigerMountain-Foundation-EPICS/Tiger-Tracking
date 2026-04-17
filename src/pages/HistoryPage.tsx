@@ -8,7 +8,7 @@ import { useConnectionState } from "../hooks/useConnectionState";
 import { useSettings } from "../hooks/useSettings";
 import { aggregateByDay, createDemoHistory } from "../services/demo";
 import { firebaseService } from "../services/firebase";
-import { formatDateOnly, formatTempLabel, toDisplayTemp } from "../utils/format";
+import { formatTempLabel, formatTimestamp, toDisplayTemp } from "../utils/format";
 
 const dateDaysAgo = (daysAgo: number): string => {
   const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
@@ -17,10 +17,10 @@ const dateDaysAgo = (daysAgo: number): string => {
 
 export const HistoryPage = () => {
   const { snapshot } = useConnectionState();
-  const { settings } = useSettings();
+  const { settings }  = useSettings();
 
   const [startDay, setStartDay] = useState<string>(dateDaysAgo(7));
-  const [endDay, setEndDay] = useState<string>(dateDaysAgo(0));
+  const [endDay,   setEndDay]   = useState<string>(dateDaysAgo(0));
 
   const deviceId = snapshot.device?.id ?? "demo-esp32";
 
@@ -28,17 +28,17 @@ export const HistoryPage = () => {
     queryKey: ["history", startDay, endDay, deviceId, settings.demoMode],
     queryFn: async () => {
       const startTs = new Date(`${startDay}T00:00:00`).getTime();
-      const endTs = new Date(`${endDay}T23:59:59`).getTime();
+      const endTs   = new Date(`${endDay}T23:59:59`).getTime();
 
       if (settings.demoMode) {
         const days = Math.max(1, Math.ceil((endTs - startTs) / (24 * 60 * 60 * 1000)));
-        return createDemoHistory(days, settings, deviceId).filter(
-          (reading) => reading.timestamp >= startTs && reading.timestamp <= endTs
+        return createDemoHistory(days, deviceId).filter(
+          (r) => r.timestamp >= startTs && r.timestamp <= endTs
         );
       }
 
       return firebaseService.getReadingsRange({ startTs, endTs, deviceId });
-    }
+    },
   });
 
   const aggregatesQuery = useQuery({
@@ -49,23 +49,25 @@ export const HistoryPage = () => {
       }
       return firebaseService.getDailyAggregates({ startDay, endDay, deviceId });
     },
-    enabled: Boolean(deviceId) && !readingsQuery.isLoading
+    enabled: Boolean(deviceId) && !readingsQuery.isLoading,
   });
 
   const chartData = useMemo(() => {
-    const records = readingsQuery.data ?? [];
-    return [...records]
+    return [...(readingsQuery.data ?? [])]
       .sort((a, b) => a.timestamp - b.timestamp)
-      .map((reading) => ({
-        label: new Date(reading.timestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
-        temp: toDisplayTemp(reading.temperatureC, settings.units),
-        humidity: reading.humidityPct,
-        soil: reading.soilPct
+      .map((r) => ({
+        label:    new Date(r.timestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
+        temp:     toDisplayTemp(r.temperatureC, settings.units),
+        humidity: r.humidityPct,
+        soil1:    r.soil1Pct,
+        soil2:    r.soil2Pct,
       }));
   }, [readingsQuery.data, settings.units]);
 
   return (
     <div className="space-y-4">
+
+      {/* ── Chart card ── */}
       <Card className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -78,7 +80,7 @@ export const HistoryPage = () => {
               <input
                 type="date"
                 value={startDay}
-                onChange={(event) => setStartDay(event.target.value)}
+                onChange={(e) => setStartDay(e.target.value)}
                 className="app-input"
               />
             </label>
@@ -87,7 +89,7 @@ export const HistoryPage = () => {
               <input
                 type="date"
                 value={endDay}
-                onChange={(event) => setEndDay(event.target.value)}
+                onChange={(e) => setEndDay(e.target.value)}
                 className="app-input"
               />
             </label>
@@ -108,38 +110,80 @@ export const HistoryPage = () => {
                 />
                 <YAxis hide />
                 <Tooltip />
-                <Line type="monotone" dataKey="temp" stroke="#ef7c28" strokeWidth={2.4} dot={false} />
-                <Line type="monotone" dataKey="humidity" stroke="#17386c" strokeWidth={2.1} dot={false} />
-                <Line type="monotone" dataKey="soil" stroke="#76a8a2" strokeWidth={2.6} dot={false} />
+                <Line type="monotone" dataKey="temp"     stroke="#ef7c28" strokeWidth={2.4} dot={false} name="Temp" />
+                <Line type="monotone" dataKey="humidity" stroke="#17386c" strokeWidth={2.1} dot={false} name="Humidity" />
+                <Line type="monotone" dataKey="soil1"    stroke="#76a8a2" strokeWidth={2.6} dot={false} name="Probe 1" />
+                <Line type="monotone" dataKey="soil2"    stroke="#6d8d42" strokeWidth={2.6} dot={false} name="Probe 2" />
               </LineChart>
             </ResponsiveContainer>
           </div>
         ) : (
-          <EmptyState title="No records found" description="Adjust the date range or log more readings." />
+          <EmptyState
+            title="No records found"
+            description="Adjust the date range or log more readings."
+          />
         )}
       </Card>
 
+      {/* ── Daily aggregates ── */}
+      {(aggregatesQuery.data ?? []).length > 0 && (
+        <Card>
+          <p className="eyebrow">Daily Summary</p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="app-table min-w-[700px]">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Readings</th>
+                  <th>Avg Temp</th>
+                  <th>Avg Humidity</th>
+                  <th>Avg Probe 1</th>
+                  <th>Avg Probe 2</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(aggregatesQuery.data ?? []).map((agg) => (
+                  <tr key={agg.id}>
+                    <td>{agg.day}</td>
+                    <td>{agg.count}</td>
+                    <td>{formatTempLabel(agg.avgTemperatureC, settings.units)}</td>
+                    <td>{agg.avgHumidityPct.toFixed(1)}%</td>
+                    <td>{agg.avgSoil1Pct.toFixed(1)}%</td>
+                    <td>{agg.avgSoil2Pct.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Raw readings table ── */}
       <Card>
         <p className="eyebrow">Reading Table</p>
         <div className="mt-3 overflow-x-auto">
-          <table className="app-table min-w-[700px]">
+          <table className="app-table min-w-[780px]">
             <thead>
               <tr>
                 <th>Timestamp</th>
                 <th>Temp</th>
                 <th>Humidity</th>
-                <th>Soil</th>
+                <th>Probe 1</th>
+                <th>Probe 2</th>
+                <th>SD</th>
                 <th>Source</th>
               </tr>
             </thead>
             <tbody>
-              {(readingsQuery.data ?? []).slice(0, 60).map((reading) => (
-                <tr key={reading.id}>
-                  <td>{new Date(reading.timestamp).toLocaleString()}</td>
-                  <td>{formatTempLabel(reading.temperatureC, settings.units)}</td>
-                  <td>{reading.humidityPct.toFixed(1)}%</td>
-                  <td>{reading.soilPct.toFixed(1)}%</td>
-                  <td className="uppercase tracking-[0.16em] text-slate-500">{reading.source}</td>
+              {(readingsQuery.data ?? []).slice(0, 60).map((r) => (
+                <tr key={r.id}>
+                  <td>{formatTimestamp(r.timestamp)}</td>
+                  <td>{formatTempLabel(r.temperatureC, settings.units)}</td>
+                  <td>{r.humidityPct.toFixed(1)}%</td>
+                  <td>{r.soil1Pct.toFixed(1)}%</td>
+                  <td>{r.soil2Pct.toFixed(1)}%</td>
+                  <td>{r.sdOk === true ? "✅" : r.sdOk === false ? "❌" : "—"}</td>
+                  <td className="uppercase tracking-[0.16em] text-slate-500">{r.source}</td>
                 </tr>
               ))}
             </tbody>

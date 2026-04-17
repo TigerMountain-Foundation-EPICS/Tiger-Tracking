@@ -6,7 +6,7 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState
+  useState,
 } from "react";
 import { bleService } from "../services/ble";
 import { DEFAULT_DEMO_DEVICE_ID, DemoDataGenerator } from "../services/demo";
@@ -16,6 +16,7 @@ import { useSettings } from "./useSettings";
 import { useToast } from "./useToast";
 
 const MAX_READINGS = 800;
+const LAST_READING_KEY = "sensor.last.reading.v1";
 
 interface ConnectionStateValue {
   snapshot: ConnectionSnapshot;
@@ -41,28 +42,48 @@ export const ConnectionStateProvider = ({ children }: { children: React.ReactNod
   const [bleSnapshot, setBleSnapshot] = useState<ConnectionSnapshot>(bleService.getSnapshot());
   const [demoLastPacketAt, setDemoLastPacketAt] = useState<number | null>(null);
   const [readings, setReadings] = useState<SensorReading[]>([]);
-  const [user, setUser] = useState<User | null>(firebaseService.getCurrentUser());
+  const [user, setUser] = useState<User | null>(null);
 
-  const demoGeneratorRef = useRef<DemoDataGenerator | null>(null);
-  const previousStatus = useRef<string>(bleSnapshot.status);
+  // ── Last known reading — persisted to localStorage ──────────────────────────
+  const [lastKnownReading, setLastKnownReading] = useState<SensorReading | null>(() => {
+    try {
+      const stored = localStorage.getItem(LAST_READING_KEY);
+      return stored ? (JSON.parse(stored) as SensorReading) : null;
+    } catch {
+      return null;
+    }
+  });
 
-  const pushReading = useCallback((reading: SensorReading) => {
-    setReadings((current) => [reading, ...current].slice(0, MAX_READINGS));
+  const persistLastKnown = useCallback((reading: SensorReading) => {
+    setLastKnownReading(reading);
+    try {
+      localStorage.setItem(LAST_READING_KEY, JSON.stringify(reading));
+    } catch {
+      // storage full — ignore
+    }
   }, []);
 
-  useEffect(() => {
-    bleService.setCalibration(settings.soilCalibration);
-  }, [settings.soilCalibration]);
+  const demoGeneratorRef = useRef<DemoDataGenerator | null>(null);
+  const previousStatus   = useRef<string>(bleSnapshot.status);
 
+  const pushReading = useCallback(
+    (reading: SensorReading) => {
+      setReadings((current) => [reading, ...current].slice(0, MAX_READINGS));
+      persistLastKnown(reading);
+    },
+    [persistLastKnown]
+  );
+
+  // ── BLE connection + reading listeners ───────────────────────────────────────
   useEffect(() => {
-    const unsubscribeConnection = bleService.onConnection((next) => {
+    const unsubConn = bleService.onConnection((next) => {
       setBleSnapshot(next);
-      const previous = previousStatus.current;
-      if (previous !== "connected" && next.status === "connected") {
+      const prev = previousStatus.current;
+      if (prev !== "connected" && next.status === "connected") {
         pushToast(`Connected to ${next.device?.name ?? "ESP32"}`, "success");
       }
-      if (previous === "connected" && next.status === "disconnected") {
-        pushToast("Device disconnected", "warning");
+      if (prev === "connected" && next.status === "disconnected") {
+        pushToast("Device disconnected — showing last known data", "warning");
       }
       if (next.status === "error" && next.error) {
         pushToast(next.error, "error");
@@ -70,49 +91,46 @@ export const ConnectionStateProvider = ({ children }: { children: React.ReactNod
       previousStatus.current = next.status;
     });
 
-    const unsubscribeReadings = bleService.onReading((reading) => {
-      pushReading(reading);
+    const unsubRead = bleService.onReading((reading) => {
+  pushReading(reading);
+  // Auto-sync every BLE reading to Firebase
+  if (settings.firebaseEnabled && firebaseService.isEnabled()) {
+    firebaseService.logReading(reading).then((result) => {
+      if (result.synced) {
+        console.log("[Firebase] Reading synced:", reading.deviceId);
+      }
+    }).catch((err) => {
+      console.error("[Firebase] Auto-sync failed:", err);
     });
+  }
+});
 
     return () => {
-      unsubscribeConnection();
-      unsubscribeReadings();
+      unsubConn();
+      unsubRead();
     };
   }, [pushReading, pushToast]);
 
+  // ── Demo mode ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (settings.demoMode) {
       demoGeneratorRef.current?.stop();
-      demoGeneratorRef.current = new DemoDataGenerator({ soilCalibration: settings.soilCalibration });
-
+      demoGeneratorRef.current = new DemoDataGenerator();
       demoGeneratorRef.current.start({
         connected: settings.demoConnected,
-        deviceId: DEFAULT_DEMO_DEVICE_ID,
+        deviceId:  DEFAULT_DEMO_DEVICE_ID,
         onReading: (reading) => {
           setDemoLastPacketAt(reading.timestamp);
           pushReading(reading);
-        }
+        },
       });
       return;
     }
-
     demoGeneratorRef.current?.stop();
     demoGeneratorRef.current = null;
-  }, [settings.demoConnected, settings.demoMode, settings.soilCalibration, pushReading]);
+  }, [settings.demoConnected, settings.demoMode, pushReading]);
 
-  useEffect(() => {
-    const unsubscribe = firebaseService.onAuth(setUser);
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    if (!settings.firebaseEnabled || !firebaseService.isEnabled() || firebaseService.getCurrentUser()) {
-      return;
-    }
-
-    firebaseService.signInDemo().catch(() => undefined);
-  }, [settings.firebaseEnabled]);
-
+  // ── Online: flush pending ────────────────────────────────────────────────────
   useEffect(() => {
     const handleOnline = () => {
       firebaseService.flushPending().then((result) => {
@@ -121,29 +139,35 @@ export const ConnectionStateProvider = ({ children }: { children: React.ReactNod
         }
       });
     };
-
     window.addEventListener("online", handleOnline);
     return () => window.removeEventListener("online", handleOnline);
   }, [pushToast]);
 
+  // ── Effective snapshot ───────────────────────────────────────────────────────
   const effectiveSnapshot: ConnectionSnapshot = useMemo(() => {
-    if (!settings.demoMode) {
-      return bleSnapshot;
-    }
-
+    if (!settings.demoMode) return bleSnapshot;
     return {
-      status: settings.demoConnected ? "connected" : "disconnected",
-      error: null,
+      status:      settings.demoConnected ? "connected" : "disconnected",
+      error:       null,
       lastPacketAt: demoLastPacketAt,
       device: {
-        id: DEFAULT_DEMO_DEVICE_ID,
-        name: "Demo ESP32",
+        id:              DEFAULT_DEMO_DEVICE_ID,
+        name:            "Demo ESP32",
         firmwareVersion: "demo-1.0",
-        lastPacketAt: demoLastPacketAt ?? undefined
-      }
+        lastPacketAt:    demoLastPacketAt ?? undefined,
+      },
     };
   }, [bleSnapshot, demoLastPacketAt, settings.demoConnected, settings.demoMode]);
 
+  // ── Latest reading: live if available, last known if disconnected ─────────────
+  const latestReading = useMemo<SensorReading | null>(() => {
+    // If we have a live reading in this session, always use it
+    if (readings.length > 0) return readings[0];
+    // No live readings yet — fall back to last known from previous session
+    return lastKnownReading;
+  }, [readings, lastKnownReading]);
+
+  // ── Actions ──────────────────────────────────────────────────────────────────
   const connect = useCallback(async () => {
     if (settings.demoMode) {
       setDemoConnected(true);
@@ -171,22 +195,17 @@ export const ConnectionStateProvider = ({ children }: { children: React.ReactNod
     await bleService.reconnect();
   }, [settings.demoMode, pushToast, setDemoConnected]);
 
-  const clearReadings = useCallback(() => {
-    setReadings([]);
-  }, []);
-
-  const latestReading = readings[0] ?? null;
+  const clearReadings = useCallback(() => setReadings([]), []);
 
   const logReading = useCallback(
     async (reading?: SensorReading | null) => {
       const target = reading ?? latestReading;
-      if (!target) {
-        throw new Error("No reading available to log.");
-      }
+      if (!target) throw new Error("No reading available to log.");
 
       const result = settings.firebaseEnabled
         ? await firebaseService.logReading(target)
         : await firebaseService.logReadingLocalOnly(target);
+
       if (result.synced) {
         pushToast("Reading synced", "success");
       } else {
@@ -214,34 +233,31 @@ export const ConnectionStateProvider = ({ children }: { children: React.ReactNod
 
   const value = useMemo<ConnectionStateValue>(
     () => ({
-      snapshot: effectiveSnapshot,
+      snapshot:      effectiveSnapshot,
       readings,
       latestReading,
       isBleSupported: bleService.isSupported(),
-      localOnly: !settings.firebaseEnabled || !firebaseService.isEnabled(),
+      localOnly:     !settings.firebaseEnabled || !firebaseService.isEnabled(),
       user,
       connect,
       disconnect,
       reconnect,
       clearReadings,
       logReading,
-      flushPending
+      flushPending,
     }),
     [
-      connect,
-      disconnect,
-      effectiveSnapshot,
-      flushPending,
-      latestReading,
-      logReading,
-      readings,
-      reconnect,
-      settings.firebaseEnabled,
-      user
+      connect, disconnect, effectiveSnapshot, flushPending,
+      latestReading, logReading, readings, reconnect,
+      settings.firebaseEnabled, user, clearReadings,
     ]
   );
 
-  return <ConnectionStateContext.Provider value={value}>{children}</ConnectionStateContext.Provider>;
+  return (
+    <ConnectionStateContext.Provider value={value}>
+      {children}
+    </ConnectionStateContext.Provider>
+  );
 };
 
 export const useConnectionState = (): ConnectionStateValue => {

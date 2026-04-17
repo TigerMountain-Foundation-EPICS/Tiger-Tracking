@@ -7,3 +7,4 @@ dist
 .env.*
 !.env.example
 .vercel
+VITE_FIREBASE_DATABASE_URL=https://tmf-epics-default-rtdb.firebaseio.com
