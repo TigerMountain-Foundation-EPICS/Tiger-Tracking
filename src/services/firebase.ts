@@ -8,7 +8,7 @@ import { initializeApp, FirebaseApp } from "firebase/app";
 import { getDatabase, ref, push, query, orderByChild, limitToLast, get, Database } from "firebase/database";
 import { SensorReading, DailyAggregate } from "../types";
 import { aggregateByDay } from "./demo";
-import { storage } from "../utils/storage";
+import { storage } from "../hooks/utils/storage";
 
 const LOCAL_READINGS_KEY = "sensor.local.readings.v2";
 const LOCAL_PENDING_KEY  = "sensor.local.pending.v2";

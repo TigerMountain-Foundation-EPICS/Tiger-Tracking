@@ -3,7 +3,7 @@ import { MetricCard } from "../components/MetricCard";
 import { Card } from "../components/ui/Card";
 import { createDemoHistory } from "../services/demo";
 import { useSettings } from "../hooks/useSettings";
-import { formatTempLabel } from "../utils/format";
+import { formatTempLabel } from "../hooks/utils/format";
 
 export const TestRunPage = () => {
   const { settings } = useSettings();

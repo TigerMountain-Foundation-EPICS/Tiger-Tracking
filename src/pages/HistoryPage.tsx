@@ -8,7 +8,7 @@ import { useConnectionState } from "../hooks/useConnectionState";
 import { useSettings } from "../hooks/useSettings";
 import { aggregateByDay, createDemoHistory } from "../services/demo";
 import { firebaseService } from "../services/firebase";
-import { formatTempLabel, formatTimestamp, toDisplayTemp } from "../utils/format";
+import { formatTempLabel, formatTimestamp, toDisplayTemp } from "../hooks/utils/format";
 
 const dateDaysAgo = (daysAgo: number): string => {
   const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);

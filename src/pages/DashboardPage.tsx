@@ -4,7 +4,7 @@ import { Card } from "../components/ui/Card";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useSettings } from "../hooks/useSettings";
-import { formatPercent, formatTempLabel, formatTimestamp } from "../utils/format";
+import { formatPercent, formatTempLabel, formatTimestamp } from "../hooks/utils/format";
 
 const moistureLabel = (pct: number, lowThreshold: number): string => {
   if (pct <= lowThreshold) return "Low Moisture";

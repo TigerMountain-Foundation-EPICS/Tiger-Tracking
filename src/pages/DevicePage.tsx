@@ -5,7 +5,7 @@ import { useConnectionState } from "../hooks/useConnectionState";
 import { useSettings } from "../hooks/useSettings";
 import { useToast } from "../hooks/useToast";
 import { BLE_NOTIFY_CHARACTERISTIC_UUID, BLE_SERVICE_UUID } from "../services/ble";
-import { formatTimestamp } from "../utils/format";
+import { formatTimestamp } from "../hooks/utils/format";
 
 export const DevicePage = () => {
   const { snapshot, connect, disconnect, reconnect, isBleSupported } = useConnectionState();

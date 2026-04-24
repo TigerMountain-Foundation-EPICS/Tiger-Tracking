@@ -5,8 +5,8 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { Button } from "../components/ui/Button";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useSettings } from "../hooks/useSettings";
-import { formatTempLabel, formatTimestamp, toDisplayTemp } from "../utils/format";
-import { movingAverage } from "../utils/math";
+import { formatTempLabel, formatTimestamp, toDisplayTemp } from "../hooks/utils/format";
+import { movingAverage } from "../hooks/utils/math";
 
 export const LivePage = () => {
   const { readings, latestReading, logReading } = useConnectionState();

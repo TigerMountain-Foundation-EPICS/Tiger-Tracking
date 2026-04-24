@@ -1,5 +1,5 @@
 import { DailyAggregate, SensorReading } from "../types";
-import { clamp } from "../utils/math";
+import { clamp } from "../hooks/utils/math";
 
 export const DEFAULT_DEMO_DEVICE_ID = "demo-esp32";
 

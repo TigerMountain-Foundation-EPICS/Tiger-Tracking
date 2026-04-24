@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import { AppSettings, SoilCalibration, ThresholdSettings } from "../types";
-import { storage } from "../utils/storage";
+import { storage } from "./utils/storage";
 
 const SETTINGS_KEY = "sensor.app.settings.v1";
 
