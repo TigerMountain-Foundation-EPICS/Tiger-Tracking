@@ -116,8 +116,7 @@ export const DashboardPage = () => {
       {/* ── Health + Irrigation ── */}
       <section className="grid gap-4 xl:grid-cols-[1.05fr,0.95fr]">
         <Card>
-          <p className="eyebrow">Quick Health</p>
-          <h2 className="mt-2 text-3xl text-brand-navy">Field checklist</h2>
+          <h2 className="mt-2 text-3xl text-brand-orange">Quick Health</h2>
           <div className="mt-5 grid gap-3 text-sm">
             <p className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-brand-orange" />
